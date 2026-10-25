@@ -10,6 +10,11 @@ from alembic import context
 from app.config import settings
 from app.auth.models import Base
 
+# Загрузка моделей регистрирует их таблицы в общей metadata.
+from app.catalog import models as _catalog_models  # noqa: F401
+from app.notifications import models as _notification_models  # noqa: F401
+from app.tracking import models as _tracking_models  # noqa: F401
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config

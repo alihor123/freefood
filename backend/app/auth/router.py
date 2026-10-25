@@ -60,6 +60,6 @@ async def refresh(
 
 
 @auth_router.get("/me", response_model=UserDTO)
-async def me(user: User = Depends(get_current_user)) -> UserDTO:
+async def me(user: User = Depends(get_current_user)) -> User:
     """Возвращает профиль текущей сессии."""
-    return UserDTO.model_validate(user)
+    return user

@@ -6,10 +6,16 @@ from decimal import Decimal
 from pydantic import BaseModel, Field, model_validator
 
 
+class TrackingFilters(BaseModel):
+    """Параметры страницы отслеживаний."""
+
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
 class TrackingCreate(BaseModel):
     """Данные для создания отслеживания одного товара или категории."""
 
-    store_id: int = Field(gt=0)
     product_id: int | None = Field(default=None, gt=0)
     category_id: int | None = Field(default=None, gt=0)
     min_discount_percent: Decimal = Field(ge=0, le=100)
@@ -47,7 +53,7 @@ class TrackingPatch(BaseModel):
 
 
 class TrackingRead(BaseModel):
-    """Правило отслеживания, принадлежащее текущему пользователю."""
+    """Правило с магазином, вычисленным по целевому товару или категории."""
 
     id: int = Field(gt=0)
     store_id: int = Field(gt=0)

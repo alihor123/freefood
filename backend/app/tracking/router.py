@@ -1,11 +1,14 @@
 """Маршруты пользовательских отслеживаний."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.tracking.schemas import (
     TrackingCreate,
+    TrackingFilters,
     TrackingListResponse,
     TrackingPatch,
     TrackingRead,
@@ -17,8 +20,7 @@ tracking_router = APIRouter(prefix="/tracking", tags=["Отслеживание"
 
 @tracking_router.get("", response_model=TrackingListResponse)
 async def get_tracking(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    filters: Annotated[TrackingFilters, Query()],
     _user: User = Depends(get_current_user),
 ) -> TrackingListResponse:
     """Список правил текущего пользователя."""

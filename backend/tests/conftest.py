@@ -46,11 +46,18 @@ os.environ.update(
 
 database_module = importlib.import_module("app.database")
 models_module = importlib.import_module("app.auth.models")
+catalog_models_module = importlib.import_module("app.catalog.models")
+tracking_models_module = importlib.import_module("app.tracking.models")
+notification_models_module = importlib.import_module("app.notifications.models")
 main_module = importlib.import_module("app.main")
 
 AsyncSessionLocal = database_module.AsyncSessionLocal
 AuthSession = models_module.AuthSession
 User = models_module.User
+Category = catalog_models_module.Category
+Product = catalog_models_module.Product
+TrackingRule = tracking_models_module.TrackingRule
+Notification = notification_models_module.Notification
 app = main_module.app
 REQUEST_COOKIE_HEADERS: list[tuple[str, str | None]] = []
 
@@ -110,6 +117,10 @@ def build_init_data(
 
 async def _clear_database() -> None:
     async with AsyncSessionLocal() as db:
+        await db.execute(delete(Notification))
+        await db.execute(delete(TrackingRule))
+        await db.execute(delete(Product))
+        await db.execute(delete(Category))
         await db.execute(delete(AuthSession))
         await db.execute(delete(User))
         await db.commit()

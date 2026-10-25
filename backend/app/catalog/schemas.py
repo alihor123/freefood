@@ -2,8 +2,43 @@
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+class CategoryFilters(BaseModel):
+    """Фильтры списка категорий."""
+
+    store_id: int | None = Field(default=None, gt=0)
+
+
+class ProductFilters(BaseModel):
+    """Фильтры и страница каталога."""
+
+    search: str | None = Field(default=None, min_length=1, max_length=200)
+    store_id: int | None = Field(default=None, gt=0)
+    category_id: int | None = Field(default=None, gt=0)
+    min_discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    min_price: Decimal | None = Field(default=None, ge=0)
+    max_price: Decimal | None = Field(default=None, ge=0)
+    in_stock: bool | None = None
+    sort: Literal[
+        "discount_desc", "price_asc", "price_desc", "recently_checked"
+    ] = "discount_desc"
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_price_range(self) -> "ProductFilters":
+        """Проверить порядок границ цены."""
+        if (
+            self.min_price is not None
+            and self.max_price is not None
+            and self.min_price > self.max_price
+        ):
+            raise ValueError("min_price не может быть больше max_price")
+        return self
 
 
 class StoreRead(BaseModel):
@@ -46,10 +81,10 @@ class ProductSummary(BaseModel):
     category_id: int | None = Field(default=None, gt=0)
     name: str = Field(min_length=1)
     image_url: str | None = None
-    current_price: Decimal = Field(ge=0)
+    current_price: Decimal | None = Field(default=None, ge=0)
     previous_price: Decimal | None = Field(default=None, ge=0)
     discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
-    in_stock: bool
+    in_stock: bool | None = None
     availability: str | None = None
     last_checked: datetime | None = None
 
