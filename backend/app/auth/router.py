@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Request, Response
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -21,10 +23,11 @@ auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 async def telegram_auth(
     body: TelegramAuthRequest,
     response: Response,
+    x_device_id: UUID = Header(),
     db: AsyncSession = Depends(get_db),
 ) -> AccessRefreshDTO:
-    """Проверяет initData и создаёт отдельную сессию при каждом входе."""
-    tokens = await login_with_telegram(body.init_data, db)
+    """Проверяет initData и создаёт или обновляет сессию устройства."""
+    tokens = await login_with_telegram(body.init_data, str(x_device_id), db)
     security.set_access_cookies(
         tokens.access_token, response, max_age=settings.JWT_ACCESS_TTL_MINUTES * 60
     )

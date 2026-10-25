@@ -137,6 +137,7 @@ def client():
 def isolate_database(client: TestClient):
     """Очищает пользовательские данные до и после каждого теста."""
     client.cookies.clear()
+    client.headers["X-Device-Id"] = str(uuid4())
     client.portal.call(_clear_database)
     yield
     client.cookies.clear()

@@ -46,9 +46,10 @@ async def get_active_session(
 
 async def login_with_telegram(
     init_data: str,
+    device_id: str,
     db: AsyncSession,
 ) -> AccessRefreshDTO:
-    """Создаёт отдельную сессию для проверенных данных Telegram."""
+    """Создаёт или обновляет сессию устройства после проверки Telegram."""
     identity = verify_telegram_init_data(init_data)
     if identity is None:
         raise HTTPException(status_code=401, detail="Данные Telegram недействительны")
@@ -70,34 +71,54 @@ async def login_with_telegram(
             if user is None:
                 raise
 
-    user.username = identity["username"]
-    user.first_name = identity["first_name"]
-    user.last_name = identity["last_name"]
-    user.language_code = identity["language_code"]
+    # UPDATE также упорядочивает одновременные входы одного пользователя.
+    await db.execute(update(User).where(User.id == user.id).values(**identity))
+    return await create_or_update_session(user, device_id, db)
 
-    session_id = str(uuid4())
-    tokens, access_expires_at, refresh_expires_at = create_session_token_pair(
-        user.id,
-        session_id,
-    )
-    db.add(
-        AuthSession(
-            id=session_id,
-            user_id=user.id,
-            refresh_token_hash=hashlib.sha256(
-                tokens.refresh_token.encode("utf-8")
-            ).hexdigest(),
-            expires_at=refresh_expires_at,
+
+async def create_or_update_session(
+    user: User,
+    device_id: str,
+    db: AsyncSession,
+) -> AccessRefreshDTO:
+    """Находит сессию устройства и сохраняет новую пару токенов в пределах лимита."""
+    session = await db.scalar(
+        select(AuthSession).where(
+            AuthSession.user_id == user.id,
+            AuthSession.device_id == device_id,
         )
     )
+    if session is not None and (
+        session.revoked_at is not None or session.expires_at <= utc_now()
+    ):
+        await db.delete(session)
+        await db.flush()
+        session = None
+
+    if session is None:
+        session = AuthSession(
+            id=str(uuid4()),
+            user_id=user.id,
+            device_id=device_id,
+        )
+        db.add(session)
+
+    tokens, access_expires_at, refresh_expires_at = create_session_token_pair(
+        user.id,
+        session.id,
+    )
+    session.refresh_token_hash = hashlib.sha256(
+        tokens.refresh_token.encode("utf-8")
+    ).hexdigest()
+    session.expires_at = refresh_expires_at
     await db.flush()
 
-    # Сохраняем новую сессию и последние активные в пределах лимита.
+    # Сохраняем текущую сессию и последние активные в пределах лимита.
     old_sessions = (
         select(AuthSession.id)
         .where(
             AuthSession.user_id == user.id,
-            AuthSession.id != session_id,
+            AuthSession.id != session.id,
             AuthSession.revoked_at.is_(None),
             AuthSession.expires_at > utc_now(),
         )

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base, UTCDateTime, utc_now
@@ -24,11 +24,15 @@ class AuthSession(Base):
     """Одна авторизованная сессия и текущий хеш её refresh-токена."""
 
     __tablename__ = "auth_sessions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "device_id", name="uq_auth_sessions_user_device"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    device_id: Mapped[str] = mapped_column(String(36))
     refresh_token_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)

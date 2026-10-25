@@ -15,8 +15,12 @@ from app.database import AsyncSessionLocal
 from app.tasks.cleanup import cleanup_old_sessions
 
 
-def _login(client, init_data: str) -> dict:
-    response = client.post("/api/auth/telegram", json={"init_data": init_data})
+def _login(client, init_data: str, device_id: str | None = None) -> dict:
+    response = client.post(
+        "/api/auth/telegram",
+        json={"init_data": init_data},
+        headers={"X-Device-Id": device_id or str(uuid4())},
+    )
     assert response.status_code == 200
     # Здесь передаём токены явно, поведение cookies проверяется отдельно.
     client.cookies.clear()
@@ -168,7 +172,7 @@ def test_inactive_session_rejects_access_and_refresh(client, init_data_factory, 
     assert refresh_response.status_code == 401
 
 
-def test_repeated_login_creates_independent_sessions(client, init_data_factory):
+def test_different_devices_create_independent_sessions(client, init_data_factory):
     init_data = init_data_factory()
     first = _login(client, init_data)
     second = _login(client, init_data)
@@ -182,6 +186,96 @@ def test_repeated_login_creates_independent_sessions(client, init_data_factory):
     )
 
 
+def test_same_device_login_reuses_session_and_replaces_refresh(client, init_data_factory):
+    init_data = init_data_factory()
+    device_id = str(uuid4())
+    first = _login(client, init_data, device_id)
+    second = _login(client, init_data, device_id)
+    session_id = _claims(first["access_token"], "access")[1]
+
+    assert _claims(second["access_token"], "access")[1] == session_id
+    assert client.portal.call(_session_ids, first["user"]["id"]) == [session_id]
+    assert client.post(
+        "/api/auth/refresh", json={"refresh_token": first["refresh_token"]}
+    ).status_code == 401
+    assert client.post(
+        "/api/auth/refresh", json={"refresh_token": second["refresh_token"]}
+    ).status_code == 200
+
+
+@pytest.mark.parametrize("state", ["revoked", "expired", "deleted"])
+def test_login_creates_new_session_after_previous_one_ended(
+    client, init_data_factory, state
+):
+    init_data = init_data_factory()
+    device_id = str(uuid4())
+    first = _login(client, init_data, device_id)
+    old_id = _claims(first["access_token"], "access")[1]
+    client.portal.call(_invalidate_session, old_id, state)
+    second = _login(client, init_data, device_id)
+    new_id = _claims(second["access_token"], "access")[1]
+
+    assert new_id != old_id
+    assert client.portal.call(_session_ids, first["user"]["id"]) == [new_id]
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {first['access_token']}"},
+    ).status_code == 401
+    assert client.post(
+        "/api/auth/refresh", json={"refresh_token": first["refresh_token"]}
+    ).status_code == 401
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {second['access_token']}"},
+    ).status_code == 200
+
+
+def test_same_device_can_have_sessions_of_different_users(client, init_data_factory):
+    device_id = str(uuid4())
+    first = _login(client, init_data_factory(), device_id)
+    other = _login(client, init_data_factory(telegram_id=987654321), device_id)
+    repeated = _login(client, init_data_factory(), device_id)
+    assert _claims(repeated["access_token"], "access")[1] == _claims(
+        first["access_token"], "access"
+    )[1]
+    assert other["user"]["id"] != repeated["user"]["id"]
+    assert client.portal.call(_count_sessions) == 2
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_concurrent_logins_on_same_device_keep_one_session(
+    client, init_data_factory, existing
+):
+    init_data = init_data_factory()
+    device_id = str(uuid4())
+    if existing:
+        _login(client, init_data, device_id)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                client.post,
+                "/api/auth/telegram",
+                json={"init_data": init_data},
+                headers={"X-Device-Id": device_id},
+            )
+            for _ in range(2)
+        ]
+        responses = [future.result(timeout=15) for future in futures]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    tokens = [response.json() for response in responses]
+    ids = {_claims(token["access_token"], "access")[1] for token in tokens}
+    assert len(ids) == 1
+    assert client.portal.call(_count_users) == 1
+    assert client.portal.call(_count_sessions) == 1
+    session_id = next(iter(ids))
+    current_hash = client.portal.call(_session_state, session_id)[0]
+    assert sum(
+        hashlib.sha256(token["refresh_token"].encode()).hexdigest() == current_hash
+        for token in tokens
+    ) == 1
+
+
 def test_concurrent_first_logins_create_one_user_and_two_sessions(
     client,
     init_data_factory,
@@ -193,6 +287,7 @@ def test_concurrent_first_logins_create_one_user_and_two_sessions(
                 client.post,
                 "/api/auth/telegram",
                 json={"init_data": init_data},
+                headers={"X-Device-Id": str(uuid4())},
             )
             for _ in range(2)
         ]
@@ -262,7 +357,12 @@ def test_concurrent_logins_keep_active_session_limit(client, init_data_factory):
     first = [_login(client, init_data) for _ in range(4)]
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(client.post, "/api/auth/telegram", json={"init_data": init_data})
+            pool.submit(
+                client.post,
+                "/api/auth/telegram",
+                json={"init_data": init_data},
+                headers={"X-Device-Id": str(uuid4())},
+            )
             for _ in range(2)
         ]
         responses = [future.result(timeout=15) for future in futures]
@@ -273,6 +373,31 @@ def test_concurrent_logins_keep_active_session_limit(client, init_data_factory):
     assert _claims(first[0]["access_token"], "access")[1] not in current_ids
     for response in responses:
         assert _claims(response.json()["access_token"], "access")[1] in current_ids
+
+
+def test_reusing_device_at_session_limit_keeps_other_sessions(client, init_data_factory):
+    init_data = init_data_factory()
+    devices = [str(uuid4()) for _ in range(5)]
+    tokens = [_login(client, init_data, device) for device in devices]
+    before = client.portal.call(_session_ids, tokens[0]["user"]["id"])
+    repeated = _login(client, init_data, devices[0])
+    assert _claims(repeated["access_token"], "access")[1] == _claims(
+        tokens[0]["access_token"], "access"
+    )[1]
+    assert client.portal.call(_session_ids, repeated["user"]["id"]) == before
+
+
+@pytest.mark.parametrize("device_id", [None, "not-a-uuid"])
+def test_login_requires_valid_device_header(client, init_data_factory, device_id):
+    client.headers.pop("X-Device-Id", None)
+    headers = {} if device_id is None else {"X-Device-Id": device_id}
+    response = client.post(
+        "/api/auth/telegram",
+        json={"init_data": init_data_factory()},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert client.portal.call(_count_sessions) == 0
 
 
 def test_me_and_refresh_reject_missing_tampered_and_wrong_token_types(
@@ -487,6 +612,7 @@ async def _add_cleanup_rows(user_id: int, now: datetime) -> None:
                 AuthSession(
                     id=str(uuid4()),
                     user_id=user_id,
+                    device_id=str(uuid4()),
                     refresh_token_hash="a" * 64,
                     created_at=now - timedelta(days=1),
                     expires_at=now - timedelta(seconds=1),
@@ -494,6 +620,7 @@ async def _add_cleanup_rows(user_id: int, now: datetime) -> None:
                 AuthSession(
                     id=str(uuid4()),
                     user_id=user_id,
+                    device_id=str(uuid4()),
                     refresh_token_hash="b" * 64,
                     created_at=now - timedelta(days=1),
                     expires_at=now + timedelta(days=1),
@@ -502,6 +629,7 @@ async def _add_cleanup_rows(user_id: int, now: datetime) -> None:
                 AuthSession(
                     id=str(uuid4()),
                     user_id=user_id,
+                    device_id=str(uuid4()),
                     refresh_token_hash="c" * 64,
                     created_at=now - timedelta(days=1),
                     expires_at=now,
