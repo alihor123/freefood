@@ -6,19 +6,20 @@ from uuid import uuid4
 
 import pytest
 from authx import RequestToken
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from app.config import settings
-from app.database.database import AsyncSessionLocal
-from app.database.models import AuthSession, User
-from app.database.repositories.session_repo import cleanup_sessions
-from app.services.token_service import security
+from app.auth.models import AuthSession, User
+from app.auth.tokens import security
+from app.database import AsyncSessionLocal
 from app.tasks.cleanup import cleanup_old_sessions
 
 
 def _login(client, init_data: str) -> dict:
     response = client.post("/api/auth/telegram", json={"init_data": init_data})
     assert response.status_code == 200
+    # Здесь передаём токены явно, поведение cookies проверяется отдельно.
+    client.cookies.clear()
     return response.json()
 
 
@@ -56,6 +57,23 @@ async def _session_state(session_id: str):
         )
 
 
+async def _invalidate_session(session_id: str, state: str) -> None:
+    async with AsyncSessionLocal() as db:
+        if state == "deleted":
+            statement = delete(AuthSession).where(AuthSession.id == session_id)
+        else:
+            values = (
+                {"revoked_at": datetime.now(timezone.utc)}
+                if state == "revoked"
+                else {"expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)}
+            )
+            statement = (
+                update(AuthSession).where(AuthSession.id == session_id).values(**values)
+            )
+        await db.execute(statement)
+        await db.commit()
+
+
 async def _session_ids(user_id: int) -> list[str]:
     async with AsyncSessionLocal() as db:
         result = await db.scalars(
@@ -74,7 +92,10 @@ async def _count_sessions() -> int:
         return await db.scalar(select(func.count()).select_from(AuthSession))
 
 
-def test_login_rotation_and_logout_keep_one_session(client, init_data_factory):
+def test_login_rotation_rejects_old_refresh_and_keeps_one_session(
+    client,
+    init_data_factory,
+):
     init_data = init_data_factory(extra={"signature": "signed-extra-field"})
     first = _login(client, init_data)
     user_id = first["user"]["id"]
@@ -113,6 +134,7 @@ def test_login_rotation_and_logout_keep_one_session(client, init_data_factory):
     )
     assert rotated_state[0] != initial_state[0]
 
+    client.cookies.clear()
     replay = client.post(
         "/api/auth/refresh",
         json={"refresh_token": first["refresh_token"]},
@@ -126,32 +148,24 @@ def test_login_rotation_and_logout_keep_one_session(client, init_data_factory):
         == 200
     )
 
-    logout = client.post(
-        "/api/auth/logout",
-        headers={"Authorization": f"Bearer {rotated['access_token']}"},
+
+@pytest.mark.parametrize("state", ["revoked", "expired", "deleted"])
+def test_inactive_session_rejects_access_and_refresh(client, init_data_factory, state):
+    tokens = _login(client, init_data_factory())
+    session_id = _claims(tokens["access_token"], "access")[1]
+    client.portal.call(_invalidate_session, session_id, state)
+
+    access_response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
     )
-    assert logout.status_code == 200
-    assert (
-        client.get(
-            "/api/auth/me",
-            headers={"Authorization": f"Bearer {first['access_token']}"},
-        ).status_code
-        == 401
+    refresh_response = client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
     )
-    assert (
-        client.get(
-            "/api/auth/me",
-            headers={"Authorization": f"Bearer {rotated['access_token']}"},
-        ).status_code
-        == 401
-    )
-    assert (
-        client.post(
-            "/api/auth/refresh",
-            json={"refresh_token": rotated["refresh_token"]},
-        ).status_code
-        == 401
-    )
+
+    assert access_response.status_code == 401
+    assert refresh_response.status_code == 401
 
 
 def test_repeated_login_creates_independent_sessions(client, init_data_factory):
@@ -166,6 +180,99 @@ def test_repeated_login_creates_independent_sessions(client, init_data_factory):
     assert client.portal.call(_session_ids, first["user"]["id"]) == sorted(
         [first_session_id, second_session_id]
     )
+
+
+def test_concurrent_first_logins_create_one_user_and_two_sessions(
+    client,
+    init_data_factory,
+):
+    init_data = init_data_factory()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(
+                client.post,
+                "/api/auth/telegram",
+                json={"init_data": init_data},
+            )
+            for _ in range(2)
+        ]
+        responses = [future.result(timeout=15) for future in futures]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    tokens = [response.json() for response in responses]
+    user_id = tokens[0]["user"]["id"]
+    session_ids = [_claims(token["access_token"], "access")[1] for token in tokens]
+
+    assert tokens[1]["user"]["id"] == user_id
+    assert len(set(session_ids)) == 2
+    assert client.portal.call(_count_users) == 1
+    assert client.portal.call(_session_ids, user_id) == sorted(session_ids)
+
+
+def test_new_login_removes_oldest_active_session_only_for_current_user(
+    client,
+    init_data_factory,
+):
+    init_data = init_data_factory()
+    tokens = [_login(client, init_data) for _ in range(5)]
+    other = _login(client, init_data_factory(telegram_id=987654321))
+    tokens.append(_login(client, init_data))
+    user_id = tokens[-1]["user"]["id"]
+    expected_ids = sorted(
+        _claims(token["access_token"], "access")[1] for token in tokens[1:]
+    )
+    assert client.portal.call(_session_ids, user_id) == expected_ids
+    assert client.portal.call(_count_sessions) == 6
+
+    oldest = tokens[0]
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {oldest['access_token']}"},
+    ).status_code == 401
+    assert client.post(
+        "/api/auth/refresh", json={"refresh_token": oldest["refresh_token"]}
+    ).status_code == 401
+    for valid in (tokens[-1], other):
+        assert client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {valid['access_token']}"},
+        ).status_code == 200
+
+
+def test_expired_and_revoked_sessions_do_not_count_toward_limit(
+    client,
+    init_data_factory,
+):
+    init_data = init_data_factory()
+    first = _login(client, init_data)
+    user_id = first["user"]["id"]
+    client.portal.call(_add_cleanup_rows, user_id, datetime.now(timezone.utc))
+    for _ in range(4):
+        _login(client, init_data)
+
+    assert client.portal.call(_count_sessions) == 8
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {first['access_token']}"},
+    ).status_code == 200
+
+
+def test_concurrent_logins_keep_active_session_limit(client, init_data_factory):
+    init_data = init_data_factory()
+    first = [_login(client, init_data) for _ in range(4)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(client.post, "/api/auth/telegram", json={"init_data": init_data})
+            for _ in range(2)
+        ]
+        responses = [future.result(timeout=15) for future in futures]
+
+    assert [response.status_code for response in responses] == [200, 200]
+    current_ids = client.portal.call(_session_ids, first[0]["user"]["id"])
+    assert len(current_ids) == 5
+    assert _claims(first[0]["access_token"], "access")[1] not in current_ids
+    for response in responses:
+        assert _claims(response.json()["access_token"], "access")[1] in current_ids
 
 
 def test_me_and_refresh_reject_missing_tampered_and_wrong_token_types(
@@ -198,6 +305,49 @@ def test_me_and_refresh_reject_missing_tampered_and_wrong_token_types(
         ).status_code
         == 401
     )
+
+
+def test_me_and_refresh_reject_signed_tokens_with_invalid_claims(
+    client,
+    init_data_factory,
+):
+    tokens = _login(client, init_data_factory())
+    user_id, session_id = _claims(tokens["access_token"], "access")
+    missing_session_access = security.create_access_token(uid=str(user_id), data={})
+    malformed_user_refresh = security.create_refresh_token(
+        uid="not-a-user-id",
+        data={"session_id": session_id},
+    )
+    huge_user_access = security.create_access_token(
+        uid="9" * 128,
+        data={"session_id": session_id},
+    )
+    huge_user_refresh = security.create_refresh_token(
+        uid="9" * 128,
+        data={"session_id": session_id},
+    )
+
+    access_response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {missing_session_access}"},
+    )
+    refresh_response = client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": malformed_user_refresh},
+    )
+    huge_access_response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {huge_user_access}"},
+    )
+    huge_refresh_response = client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": huge_user_refresh},
+    )
+
+    assert access_response.status_code == 401
+    assert refresh_response.status_code == 401
+    assert huge_access_response.status_code == 401
+    assert huge_refresh_response.status_code == 401
 
 
 def test_expired_access_is_rejected_but_refresh_still_works(client, init_data_factory):
@@ -361,16 +511,9 @@ async def _add_cleanup_rows(user_id: int, now: datetime) -> None:
         await db.commit()
 
 
-async def _run_cleanup(now: datetime) -> int:
-    async with AsyncSessionLocal() as db:
-        return await cleanup_sessions(db, now)
-
-
-@pytest.mark.parametrize("run_job", [False, True])
 def test_cleanup_removes_expired_and_revoked_sessions_without_retention(
     client,
     init_data_factory,
-    run_job: bool,
 ):
     tokens = _login(client, init_data_factory())
     user_id = tokens["user"]["id"]
@@ -378,10 +521,7 @@ def test_cleanup_removes_expired_and_revoked_sessions_without_retention(
     now = datetime.now(timezone.utc)
     client.portal.call(_add_cleanup_rows, user_id, now)
 
-    if run_job:
-        deleted = client.portal.call(cleanup_old_sessions)
-    else:
-        deleted = client.portal.call(_run_cleanup, now)
+    deleted = client.portal.call(cleanup_old_sessions)
 
     assert deleted == 3
     assert client.portal.call(_session_ids, user_id) == [active_session_id]

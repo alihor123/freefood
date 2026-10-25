@@ -8,15 +8,6 @@ class TelegramAuthRequest(BaseModel):
     init_data: str = Field(
         min_length=1,
         max_length=16384,
-        description="Исходная подписанная строка Telegram.WebApp.initData",
-    )
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str = Field(
-        min_length=1,
-        max_length=8192,
-        description="Текущий refresh-токен; после успешного обмена использовать новый",
     )
 
 
@@ -40,9 +31,3 @@ class AccessRefreshDTO(BaseModel):
     token_type: Literal["bearer"] = "bearer"
     expires_in: int
     user: UserDTO
-
-
-class LogoutDTO(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    message: str = "Выход выполнен"

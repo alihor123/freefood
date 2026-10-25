@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     TELEGRAM_CLOCK_SKEW_SECONDS: int = 30
 
     DATABASE_NAME: str = "freefood.db"
+    MAX_ACTIVE_SESSIONS: int = 5
     SESSION_CLEANUP_ENABLED: bool = True
     SESSION_CLEANUP_INTERVAL_HOURS: int = 24
 

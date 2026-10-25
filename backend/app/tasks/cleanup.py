@@ -1,17 +1,27 @@
 import logging
-from datetime import datetime, timezone
 
-from app.database.database import AsyncSessionLocal
-from app.database.repositories.session_repo import cleanup_sessions
+from sqlalchemy import delete, or_
+
+from app.auth.models import AuthSession
+from app.database import AsyncSessionLocal, utc_now
 
 
 logger = logging.getLogger(__name__)
 
 
 async def cleanup_old_sessions() -> int:
-    """Удаляет все истёкшие и отозванные сессии одним SQL-запросом."""
-    now = datetime.now(timezone.utc)
+    """Удаляет истёкшие и отозванные сессии одним SQL-запросом."""
     async with AsyncSessionLocal() as db:
-        deleted_count = await cleanup_sessions(db, now)
+        result = await db.execute(
+            delete(AuthSession).where(
+                or_(
+                    AuthSession.expires_at <= utc_now(),
+                    AuthSession.revoked_at.is_not(None),
+                )
+            )
+        )
+        await db.commit()
+
+    deleted_count = result.rowcount or 0
     logger.info("Очистка сессий: удалено %s записей", deleted_count)
     return deleted_count

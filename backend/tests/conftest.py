@@ -9,6 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlencode
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -39,17 +40,32 @@ os.environ.update(
         "TELEGRAM_INIT_DATA_TTL_SECONDS": "300",
         "TELEGRAM_CLOCK_SKEW_SECONDS": "30",
         "SESSION_CLEANUP_ENABLED": "false",
+        "MAX_ACTIVE_SESSIONS": "5",
     }
 )
 
-database_module = importlib.import_module("app.database.database")
-models_module = importlib.import_module("app.database.models")
+database_module = importlib.import_module("app.database")
+models_module = importlib.import_module("app.auth.models")
 main_module = importlib.import_module("app.main")
 
 AsyncSessionLocal = database_module.AsyncSessionLocal
 AuthSession = models_module.AuthSession
 User = models_module.User
 app = main_module.app
+REQUEST_COOKIE_HEADERS: list[tuple[str, str | None]] = []
+
+
+@app.middleware("http")
+async def capture_auth_cookie_headers(request, call_next):
+    if request.url.path in {
+        "/api/auth/me",
+        "/api/auth/refresh",
+        "/api/products",
+    }:
+        REQUEST_COOKIE_HEADERS.append(
+            (request.url.path, request.headers.get("cookie"))
+        )
+    return await call_next(request)
 
 
 def build_init_data(
@@ -104,8 +120,13 @@ def client():
     """Применяет реальные миграции и поднимает приложение на тестовой БД."""
     alembic_config = Config(str(BACKEND_DIR / "alembic.ini"))
     try:
-        command.upgrade(alembic_config, "head")
-        with TestClient(app, raise_server_exceptions=False) as test_client:
+        with patch("logging.config.fileConfig"):
+            command.upgrade(alembic_config, "head")
+        # Логами тестов управляет pytest, а не настройки серверного процесса.
+        with (
+            patch.object(main_module, "setup_logging"),
+            TestClient(app, raise_server_exceptions=False) as test_client,
+        ):
             yield test_client
     finally:
         for suffix in ("", "-wal", "-shm"):
@@ -125,3 +146,9 @@ def isolate_database(client: TestClient):
 @pytest.fixture
 def init_data_factory():
     return build_init_data
+
+
+@pytest.fixture
+def request_cookie_headers():
+    REQUEST_COOKIE_HEADERS.clear()
+    return REQUEST_COOKIE_HEADERS

@@ -1,34 +1,32 @@
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
+from alembic import command
+from alembic.config import Config
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import inspect
+from fastapi import APIRouter, FastAPI
 
-from app.config import settings
-from app.database.database import engine
-from app.routers.auth import auth_router
-from app.routers.catalog import catalog_router
-from app.routers.tracking import tracking_router
-from app.services.token_service import security
+from app.auth.router import auth_router
+from app.catalog.router import catalog_router
+from app.config import BACKEND_DIR, settings
+from app.database import engine
+from app.exceptions import register_exception_handlers
+from app.logging_config import setup_logging
 from app.tasks.cleanup import cleanup_old_sessions
+from app.tracking.router import tracking_router
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Проверяет миграции и управляет планировщиком очистки сессий."""
+    """Запускает очистку сессий и освобождает ресурсы при остановке."""
+    setup_logging()
+    logger.info("API запущено")
     scheduler = AsyncIOScheduler(timezone="UTC")
     try:
-        async with engine.connect() as connection:
-            tables = await connection.run_sync(
-                lambda sync_connection: inspect(sync_connection).get_table_names()
-            )
-        if not {"users", "auth_sessions"}.issubset(tables):
-            raise RuntimeError(
-                "Схема БД не создана. Выполните: uv run alembic upgrade head"
-            )
-
         if settings.SESSION_CLEANUP_ENABLED:
             await cleanup_old_sessions()
             scheduler.add_job(
@@ -45,32 +43,25 @@ async def lifespan(app: FastAPI):
         if scheduler.running:
             scheduler.shutdown(wait=False)
         await engine.dispose()
+        logger.info("API остановлено")
 
 
 app = FastAPI(
     title="Продукты Даром — серверное API",
-    description="Авторизация реализована. Методы каталога и отслеживания пока возвращают HTTP 501.",
     version="0.1.0",
     lifespan=lifespan,
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "X-CSRF-TOKEN"],
-)
-security.handle_errors(app)
+register_exception_handlers(app)
 
+api_router = APIRouter(prefix="/api")
 
-app.include_router(auth_router, prefix="/api")
-app.include_router(catalog_router, prefix="/api")
-app.include_router(tracking_router, prefix="/api")
+api_router.include_router(auth_router)
+api_router.include_router(catalog_router)
+api_router.include_router(tracking_router)
+
+app.include_router(api_router)
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host="127.0.0.1",
-        port=8000,
-    )
+    command.upgrade(Config(str(BACKEND_DIR / "alembic.ini")), "head")
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

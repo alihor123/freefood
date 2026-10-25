@@ -1,37 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import TypeDecorator
+from sqlalchemy import BigInteger, ForeignKey, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-class UTCDateTime(TypeDecorator):
-    """Хранит даты SQLite без потери их смысла как UTC."""
-
-    impl = DateTime
-    cache_ok = True
-
-    def process_bind_param(self, value: datetime | None, _dialect) -> datetime | None:
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-
-    def process_result_value(self, value: datetime | None, _dialect) -> datetime | None:
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-
-
-class Base(DeclarativeBase):
-    pass
+from app.database import Base, UTCDateTime, utc_now
 
 
 class User(Base):

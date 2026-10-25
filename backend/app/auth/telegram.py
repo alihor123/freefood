@@ -11,7 +11,7 @@ from app.config import settings
 def verify_telegram_init_data(
     init_data: str,
 ) -> dict[str, int | str | None] | None:
-    """Проверяет подпись Telegram и извлекает минимальные данные пользователя."""
+    """Проверяет подпись Telegram и извлекает данные пользователя."""
     try:
         pairs = parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
     except ValueError:
@@ -27,10 +27,9 @@ def verify_telegram_init_data(
     if received_hash is None or re.fullmatch(r"[0-9a-f]{64}", received_hash) is None:
         return None
 
-    bot_token = settings.TELEGRAM_BOT_TOKEN
     secret_key = hmac.new(
         b"WebAppData",
-        bot_token.encode("utf-8"),
+        settings.TELEGRAM_BOT_TOKEN.encode("utf-8"),
         hashlib.sha256,
     ).digest()
     check_string = "\n".join(f"{key}={value}" for key, value in sorted(data.items()))
@@ -73,9 +72,8 @@ def verify_telegram_init_data(
     ):
         return None
 
-    optional_fields = ("last_name", "username", "language_code")
     values: dict[str, str | None] = {}
-    for field in optional_fields:
+    for field in ("last_name", "username", "language_code"):
         value = telegram_user.get(field)
         if value is not None and not isinstance(value, str):
             return None

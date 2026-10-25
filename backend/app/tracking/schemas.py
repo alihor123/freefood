@@ -6,25 +6,14 @@ from decimal import Decimal
 from pydantic import BaseModel, Field, model_validator
 
 
-DiscountPercent = Decimal
-
-
 class TrackingCreate(BaseModel):
     """Данные для создания отслеживания одного товара или категории."""
 
-    store_id: int = Field(gt=0, description="Магазин, в котором отслеживается объект")
-    product_id: int | None = Field(
-        default=None, gt=0, description="Товар для отслеживания"
-    )
-    category_id: int | None = Field(
-        default=None, gt=0, description="Категория для отслеживания"
-    )
-    min_discount_percent: DiscountPercent = Field(
-        ge=0,
-        le=100,
-        description="Минимальный размер скидки для уведомления",
-    )
-    is_active: bool = Field(default=True, description="Включено ли отслеживание")
+    store_id: int = Field(gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    category_id: int | None = Field(default=None, gt=0)
+    min_discount_percent: Decimal = Field(ge=0, le=100)
+    is_active: bool = True
 
     @model_validator(mode="after")
     def validate_target(self) -> "TrackingCreate":
@@ -37,17 +26,10 @@ class TrackingCreate(BaseModel):
 
 
 class TrackingPatch(BaseModel):
-    """Изменяемые поля правила; объект отслеживания после создания неизменяем."""
+    """Порог скидки и состояние правила для изменения."""
 
-    min_discount_percent: DiscountPercent | None = Field(
-        default=None,
-        ge=0,
-        le=100,
-        description="Новый минимальный размер скидки",
-    )
-    is_active: bool | None = Field(
-        default=None, description="Новое состояние отслеживания"
-    )
+    min_discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    is_active: bool | None = None
 
     @model_validator(mode="after")
     def validate_patch(self) -> "TrackingPatch":
@@ -67,22 +49,14 @@ class TrackingPatch(BaseModel):
 class TrackingRead(BaseModel):
     """Правило отслеживания, принадлежащее текущему пользователю."""
 
-    id: int = Field(gt=0, description="Идентификатор правила")
-    store_id: int = Field(gt=0, description="Магазин")
-    product_id: int | None = Field(
-        default=None, gt=0, description="Отслеживаемый товар"
-    )
-    category_id: int | None = Field(
-        default=None, gt=0, description="Отслеживаемая категория"
-    )
-    min_discount_percent: DiscountPercent = Field(
-        ge=0, le=100, description="Порог скидки"
-    )
-    is_active: bool = Field(description="Включено ли отслеживание")
-    created_at: datetime = Field(description="Время создания правила")
-    updated_at: datetime | None = Field(
-        default=None, description="Время последнего изменения"
-    )
+    id: int = Field(gt=0)
+    store_id: int = Field(gt=0)
+    product_id: int | None = Field(default=None, gt=0)
+    category_id: int | None = Field(default=None, gt=0)
+    min_discount_percent: Decimal = Field(ge=0, le=100)
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_target(self) -> "TrackingRead":
@@ -98,6 +72,6 @@ class TrackingListResponse(BaseModel):
     """Список правил отслеживания текущего пользователя."""
 
     items: list[TrackingRead]
-    total: int = Field(ge=0, description="Количество правил в ответе")
-    page: int = Field(ge=1, description="Номер страницы")
-    page_size: int = Field(ge=1, description="Размер страницы")
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
