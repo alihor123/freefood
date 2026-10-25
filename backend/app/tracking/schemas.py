@@ -62,7 +62,6 @@ class TrackingRead(BaseModel):
     min_discount_percent: Decimal = Field(ge=0, le=100)
     is_active: bool
     created_at: datetime
-    updated_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_target(self) -> "TrackingRead":

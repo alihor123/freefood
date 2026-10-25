@@ -19,7 +19,6 @@ class UserDTO(BaseModel):
     username: str | None
     first_name: str
     last_name: str | None
-    language_code: str | None
     created_at: datetime
 
 

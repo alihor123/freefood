@@ -15,16 +15,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base, UTCDateTime, utc_now
+from app.database import Base, UTCDateTime
 
 
 class Store(Base):
     """Сеть магазинов, доступная в каталоге."""
 
     __tablename__ = "stores"
-    __table_args__ = (
-        UniqueConstraint("code", name="uq_stores_code"),
-    )
+    __table_args__ = (UniqueConstraint("code", name="uq_stores_code"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -34,7 +32,6 @@ class Store(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=true(), nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
 class Category(Base):
@@ -42,7 +39,9 @@ class Category(Base):
 
     __tablename__ = "categories"
     __table_args__ = (
-        UniqueConstraint("store_id", "external_id", name="uq_categories_store_external"),
+        UniqueConstraint(
+            "store_id", "external_id", name="uq_categories_store_external"
+        ),
         UniqueConstraint("id", "store_id", name="uq_categories_id_store"),
     )
 
@@ -52,10 +51,6 @@ class Category(Base):
     )
     external_id: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), default=utc_now, onupdate=utc_now
-    )
 
 
 class Product(Base):
@@ -87,9 +82,4 @@ class Product(Base):
     previous_price_kopecks: Mapped[int | None] = mapped_column(Integer)
     discount_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     in_stock: Mapped[bool | None] = mapped_column(Boolean)
-    availability: Mapped[str | None] = mapped_column(Text)
     last_checked: Mapped[datetime | None] = mapped_column(UTCDateTime())
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), default=utc_now, onupdate=utc_now
-    )

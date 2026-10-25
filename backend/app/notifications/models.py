@@ -7,7 +7,6 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
-    Text,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,7 +15,7 @@ from app.database import Base, UTCDateTime, utc_now
 
 
 class Notification(Base):
-    """Уведомление со снимком товара и порога скидки."""
+    """Уведомление со снимком товара на момент события."""
 
     __tablename__ = "notifications"
     __table_args__ = (
@@ -40,14 +39,8 @@ class Notification(Base):
     store_name: Mapped[str] = mapped_column(String(128), nullable=False)
     price_kopecks: Mapped[int | None] = mapped_column(Integer)
     discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
-    threshold_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     status: Mapped[str] = mapped_column(
         String(16), default="pending", server_default=text("'pending'"), nullable=False
     )
-    attempts: Mapped[int] = mapped_column(
-        Integer, default=0, server_default=text("0"), nullable=False
-    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
-    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
-    last_error: Mapped[str | None] = mapped_column(Text)

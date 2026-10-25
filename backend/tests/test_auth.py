@@ -91,6 +91,21 @@ async def _count_users() -> int:
         return await db.scalar(select(func.count()).select_from(User))
 
 
+def test_telegram_profile_keeps_names_without_language_code(client, init_data_factory):
+    tokens = _login(client, init_data_factory())
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert response.status_code == 200
+    profile = response.json()
+    assert profile["first_name"] == "Тестовый пользователь"
+    assert profile["last_name"] == "Проверка"
+    assert profile["username"] == "freefood_test"
+    assert profile["created_at"]
+    assert "language_code" not in profile
+
+
 async def _count_sessions() -> int:
     async with AsyncSessionLocal() as db:
         return await db.scalar(select(func.count()).select_from(AuthSession))

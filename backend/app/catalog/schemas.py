@@ -23,9 +23,9 @@ class ProductFilters(BaseModel):
     min_price: Decimal | None = Field(default=None, ge=0)
     max_price: Decimal | None = Field(default=None, ge=0)
     in_stock: bool | None = None
-    sort: Literal[
-        "discount_desc", "price_asc", "price_desc", "recently_checked"
-    ] = "discount_desc"
+    sort: Literal["discount_desc", "price_asc", "price_desc", "recently_checked"] = (
+        "discount_desc"
+    )
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
 
@@ -85,7 +85,6 @@ class ProductSummary(BaseModel):
     previous_price: Decimal | None = Field(default=None, ge=0)
     discount_percent: Decimal | None = Field(default=None, ge=0, le=100)
     in_stock: bool | None = None
-    availability: str | None = None
     last_checked: datetime | None = None
 
 

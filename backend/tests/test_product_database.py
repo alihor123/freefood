@@ -201,7 +201,9 @@ def test_product_migration_preserves_auth_rows_created_at_auth_only_revision(
             "VALUES (?, 1, ?, ?, ?, ?)",
             (session_id, str(uuid4()), "a" * 64, created_at, expires_at),
         )
-        user_before = db.execute("SELECT * FROM users WHERE id = 1").fetchone()
+        user_before = db.execute(
+            "SELECT id, telegram_id, username, first_name, last_name, created_at FROM users WHERE id = 1"
+        ).fetchone()
         session_before = db.execute(
             "SELECT * FROM auth_sessions WHERE id = ?", (session_id,)
         ).fetchone()
@@ -209,7 +211,12 @@ def test_product_migration_preserves_auth_rows_created_at_auth_only_revision(
     _run_migration(monkeypatch, database_path)
 
     with closing(sqlite3.connect(database_path)) as db:
-        assert db.execute("SELECT * FROM users WHERE id = 1").fetchone() == user_before
+        assert (
+            db.execute(
+                "SELECT id, telegram_id, username, first_name, last_name, created_at FROM users WHERE id = 1"
+            ).fetchone()
+            == user_before
+        )
         assert (
             db.execute(
                 "SELECT * FROM auth_sessions WHERE id = ?", (session_id,)
@@ -233,20 +240,16 @@ def test_database_constraints_protect_targets_scope_and_notification_history(
             0
         ]
         other_store_id = db.execute(
-            "INSERT INTO stores (code, name, created_at) VALUES (?, ?, ?)",
-            ("other", "Другой магазин", timestamp),
+            "INSERT INTO stores (code, name) VALUES (?, ?)",
+            ("other", "Другой магазин"),
         ).lastrowid
         category_id = db.execute(
-            "INSERT INTO categories "
-            "(store_id, external_id, name, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (store_id, "cat-1", "Категория", timestamp, timestamp),
+            "INSERT INTO categories (store_id, external_id, name) VALUES (?, ?, ?)",
+            (store_id, "cat-1", "Категория"),
         ).lastrowid
         db.execute(
-            "INSERT INTO categories "
-            "(store_id, external_id, name, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (other_store_id, "cat-2", "Другая категория", timestamp, timestamp),
+            "INSERT INTO categories (store_id, external_id, name) VALUES (?, ?, ?)",
+            (other_store_id, "cat-2", "Другая категория"),
         )
         db.execute(
             "INSERT INTO users (id, telegram_id, first_name, created_at) "
@@ -256,61 +259,59 @@ def test_database_constraints_protect_targets_scope_and_notification_history(
         product_id = db.execute(
             "INSERT INTO products "
             "(store_id, category_id, external_id, name, current_price_kopecks, "
-            "discount_percent, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (store_id, category_id, "prod-1", "Товар", 1999, 20, timestamp, timestamp),
+            "discount_percent) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (store_id, category_id, "prod-1", "Товар", 1999, 20),
         ).lastrowid
 
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             db.execute(
                 "INSERT INTO products "
-                "(store_id, category_id, external_id, name, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(store_id, category_id, external_id, name) "
+                "VALUES (?, ?, ?, ?)",
                 (
                     other_store_id,
                     category_id,
                     "cross-store",
                     "Чужая категория",
-                    timestamp,
-                    timestamp,
                 ),
             )
 
         rule_id = db.execute(
             "INSERT INTO tracking_rules "
-            "(user_id, product_id, min_discount_percent, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (1, product_id, 15, timestamp, timestamp),
+            "(user_id, product_id, min_discount_percent, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (1, product_id, 15, timestamp),
         ).lastrowid
         with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
             db.execute(
                 "INSERT INTO tracking_rules "
-                "(user_id, product_id, min_discount_percent, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (1, product_id, 25, timestamp, timestamp),
-            )
-
-        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
-            db.execute(
-                "INSERT INTO tracking_rules "
-                "(user_id, min_discount_percent, created_at, updated_at) "
+                "(user_id, product_id, min_discount_percent, created_at) "
                 "VALUES (?, ?, ?, ?)",
-                (1, 10, timestamp, timestamp),
+                (1, product_id, 25, timestamp),
             )
 
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             db.execute(
                 "INSERT INTO tracking_rules "
-                "(user_id, product_id, category_id, min_discount_percent, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (1, product_id, category_id, 10, timestamp, timestamp),
+                "(user_id, min_discount_percent, created_at) "
+                "VALUES (?, ?, ?)",
+                (1, 10, timestamp),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            db.execute(
+                "INSERT INTO tracking_rules "
+                "(user_id, product_id, category_id, min_discount_percent, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (1, product_id, category_id, 10, timestamp),
             )
 
         notification_id = db.execute(
             "INSERT INTO notifications "
             "(user_id, rule_id, product_id, product_name, store_name, price_kopecks, "
-            "discount_percent, threshold_percent, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "discount_percent, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 1,
                 rule_id,
@@ -319,7 +320,6 @@ def test_database_constraints_protect_targets_scope_and_notification_history(
                 "Магнит",
                 1999,
                 20,
-                15,
                 timestamp,
             ),
         ).lastrowid
@@ -336,9 +336,9 @@ def test_database_constraints_protect_targets_scope_and_notification_history(
         db.execute("DELETE FROM products WHERE id = ?", (product_id,))
         assert db.execute(
             "SELECT rule_id, product_id, product_name, store_name, price_kopecks, "
-            "discount_percent, threshold_percent FROM notifications WHERE id = ?",
+            "discount_percent FROM notifications WHERE id = ?",
             (notification_id,),
-        ).fetchone() == (None, None, "Товар в истории", "Магнит", 1999, 20, 15)
+        ).fetchone() == (None, None, "Товар в истории", "Магнит", 1999, 20)
 
 
 def test_validation_migration_preserves_catalog_rules_and_notifications(
@@ -386,9 +386,9 @@ def test_validation_migration_preserves_catalog_rules_and_notifications(
             for table in APP_TABLES
         }
 
-    for revision in ("head", "20261025_0003", "head"):
-        if revision == "head":
-            _run_migration(monkeypatch, database_path)
+    for revision in ("20261025_0004", "20261025_0003", "20261025_0004"):
+        if revision == "20261025_0004":
+            _run_migration(monkeypatch, database_path, revision)
         else:
             with patch("logging.config.fileConfig"):
                 command.downgrade(Config(str(BACKEND_DIR / "alembic.ini")), revision)
@@ -399,3 +399,124 @@ def test_validation_migration_preserves_catalog_rules_and_notifications(
             }
             assert after == before
             assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_simplification_preserves_remaining_data_on_upgrade_and_downgrade(
+    tmp_path, monkeypatch
+):
+    database_path = tmp_path / "simplification.db"
+    _run_migration(monkeypatch, database_path, "20261025_0004")
+    timestamp = "2026-10-24 12:34:56"
+    session_id = str(uuid4())
+    rows = {
+        "users": {
+            "id": 1,
+            "telegram_id": 123456789,
+            "username": "tester",
+            "first_name": "Егор",
+            "last_name": "Тестов",
+            "language_code": "ru",
+            "created_at": timestamp,
+        },
+        "auth_sessions": {
+            "id": session_id,
+            "user_id": 1,
+            "device_id": str(uuid4()),
+            "refresh_token_hash": "a" * 64,
+            "created_at": timestamp,
+            "expires_at": "2026-11-01 00:00:00",
+            "revoked_at": None,
+        },
+        "categories": {
+            "id": 1,
+            "store_id": 1,
+            "external_id": "cat-100",
+            "name": "Шоколад",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        "products": {
+            "id": 1,
+            "store_id": 1,
+            "category_id": 1,
+            "external_id": "prod-100",
+            "name": "Шоколад",
+            "description": "Тёмный шоколад",
+            "image_url": "https://example.com/product.png",
+            "source_url": "https://example.com/product",
+            "current_price_kopecks": 1999,
+            "previous_price_kopecks": 2999,
+            "discount_percent": 33.34,
+            "in_stock": 1,
+            "availability": "Есть в наличии",
+            "last_checked": timestamp,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        "tracking_rules": {
+            "id": 1,
+            "user_id": 1,
+            "product_id": 1,
+            "category_id": None,
+            "min_discount_percent": 30,
+            "is_active": 1,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+        "notifications": {
+            "id": 1,
+            "user_id": 1,
+            "rule_id": 1,
+            "product_id": 1,
+            "product_name": "Шоколад на момент события",
+            "store_name": "Магнит",
+            "price_kopecks": 1999,
+            "discount_percent": 33.34,
+            "threshold_percent": 30,
+            "status": "pending",
+            "attempts": 2,
+            "created_at": timestamp,
+            "sent_at": None,
+            "next_attempt_at": "2026-10-24 13:00:00",
+            "last_error": "Таймаут",
+        },
+    }
+    with closing(sqlite3.connect(database_path)) as db, db:
+        db.execute("PRAGMA foreign_keys = ON")
+        db.execute(
+            "UPDATE stores SET website_url = ?, logo_url = ?, is_active = 0",
+            ("https://example.com", "https://example.com/logo.png"),
+        )
+        for table, values in rows.items():
+            columns = ", ".join(values)
+            parameters = ", ".join("?" for _ in values)
+            db.execute(
+                f"INSERT INTO {table} ({columns}) VALUES ({parameters})",
+                tuple(values.values()),
+            )
+        remaining = {
+            name: ", ".join(Base.metadata.tables[name].columns.keys())
+            for name in APP_TABLES
+        }
+        before = {
+            name: db.execute(f"SELECT {columns} FROM {name} ORDER BY id").fetchall()
+            for name, columns in remaining.items()
+        }
+
+    _run_migration(monkeypatch, database_path)
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    for revision in ("head", "20261025_0004", "head"):
+        with patch("logging.config.fileConfig"):
+            if revision == "head":
+                command.upgrade(config, revision)
+                command.check(config)
+            else:
+                command.downgrade(config, revision)
+        with closing(sqlite3.connect(database_path)) as db:
+            after = {
+                name: db.execute(f"SELECT {columns} FROM {name} ORDER BY id").fetchall()
+                for name, columns in remaining.items()
+            }
+            assert after == before
+            assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)

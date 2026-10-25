@@ -17,8 +17,6 @@ from app.tracking.schemas import TrackingCreate, TrackingFilters
         {"price_kopecks": -1},
         {"discount_percent": -1},
         {"discount_percent": 101},
-        {"threshold_percent": 101},
-        {"attempts": -1},
         {"status": "unknown"},
         {"product_name": ""},
     ],
@@ -29,7 +27,6 @@ def test_notification_dto_validates_values_before_saving(invalid_field):
         "product_name": "Товар",
         "store_name": "Магнит",
         "discount_percent": 30,
-        "threshold_percent": 20,
     }
     assert NotificationCreate(**values).status == "pending"
     with pytest.raises(ValidationError):

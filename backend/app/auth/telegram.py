@@ -73,7 +73,7 @@ def verify_telegram_init_data(
         return None
 
     values: dict[str, str | None] = {}
-    for field in ("last_name", "username", "language_code"):
+    for field in ("last_name", "username"):
         value = telegram_user.get(field)
         if value is not None and not isinstance(value, str):
             return None
@@ -84,5 +84,4 @@ def verify_telegram_init_data(
         "first_name": first_name,
         "last_name": values["last_name"],
         "username": values["username"],
-        "language_code": values["language_code"],
     }

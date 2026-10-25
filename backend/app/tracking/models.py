@@ -26,8 +26,12 @@ class TrackingRule(Base):
             "(product_id IS NULL AND category_id IS NOT NULL)",
             name="ck_tracking_rules_one_target",
         ),
-        UniqueConstraint("user_id", "product_id", name="uq_tracking_rules_user_product"),
-        UniqueConstraint("user_id", "category_id", name="uq_tracking_rules_user_category"),
+        UniqueConstraint(
+            "user_id", "product_id", name="uq_tracking_rules_user_product"
+        ),
+        UniqueConstraint(
+            "user_id", "category_id", name="uq_tracking_rules_user_category"
+        ),
         Index("ix_tracking_rules_product_active", "product_id", "is_active"),
         Index("ix_tracking_rules_category_active", "category_id", "is_active"),
     )
@@ -47,6 +51,3 @@ class TrackingRule(Base):
         Boolean, default=True, server_default=true(), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), default=utc_now, onupdate=utc_now
-    )
